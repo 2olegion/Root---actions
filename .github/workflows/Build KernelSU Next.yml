@@ -12,7 +12,7 @@ on:
           - 'android14'
           - 'android13'
           - 'android12'
-        default: 'android14'
+        default: 'android15'
       
       KERNEL_VERSION:
         description: "内核版本"
@@ -23,7 +23,7 @@ on:
           - '6.1'
           - '5.15'
           - '5.10'
-        default: '6.1'
+        default: '6.6'
       
       lz4kd:
        description: "是否启用lz4kd(6.1 关闭时使用 lz4 + zstd; 6.6 关闭时使用 lz4)"
@@ -32,7 +32,7 @@ on:
        options:
           - 'On'
           - 'Off'
-       default: 'Off'
+       default: 'On'
       
       bbr:
        description: "是否启用BBR算法(对手机日用无太大意义甚至可能负优化)"
@@ -41,7 +41,7 @@ on:
        options:
           - 'On'
           - 'Off'
-       default: 'Off'
+       default: 'On'
       
       bbg:
         description: "是否启用BBG基带保护"
