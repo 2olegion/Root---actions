@@ -166,8 +166,8 @@ jobs:
           echo "🔄 Syncing codebase (using $(nproc --all) threads)..."
           repo sync -c -j$(nproc --all) --no-tags --no-clone-bundle --force-sync
           
-          # Find and verify LLVM toolchain
-          LLVM_PATH=$(ls -d prebuilts/clang/host/linux-x86/clang-*/bin 2>/dev/null | head -n1)
+          # Find and verify LLVM toolchain - USE ABSOLUTE PATH!
+          LLVM_PATH=$(realpath prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
           
           if [ -z "$LLVM_PATH" ]; then
             echo "❌ Google LLVM toolchain not found!"
@@ -175,6 +175,7 @@ jobs:
             exit 1
           fi
           
+          # Save absolute path for other steps
           echo "LLVM_PATH=$LLVM_PATH" >> $GITHUB_ENV
           export PATH="$LLVM_PATH:$PATH"
           
@@ -182,6 +183,9 @@ jobs:
           echo "📋 Toolchain verification:"
           which clang && clang --version | head -1
           which ld.lld && ld.lld --version | head -1
+          which llvm-nm && echo "llvm-nm OK"
+          which llvm-objcopy && echo "llvm-objcopy OK"
+          which llvm-readelf && echo "llvm-readelf OK"
           
           cd common
           
@@ -276,23 +280,13 @@ jobs:
           set -e
           cd kernel_workspace/common
           
-          LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
-          export PATH="$LLVM_PATH:$PATH"
-          
-          # CRITICAL: Set host tools explicitly to fix ld.lld not found
-          export HOSTCC=clang
-          export HOSTCXX=clang++
-          export HOSTLD=ld.lld
-          export LD=ld.lld
-          export AR=llvm-ar
-          export NM=llvm-nm
-          export OBJCOPY=llvm-objcopy
-          export OBJDUMP=llvm-objdump
-          export STRIP=llvm-strip
+          # Use absolute LLVM_PATH from environment
+          export PATH="${{ env.LLVM_PATH }}:$PATH"
           
           echo "📋 Verifying tools in PATH:"
-          which ld.lld
           which clang
+          which ld.lld
+          which llvm-nm
           
           make ARCH=arm64 O=out gki_defconfig
           
@@ -330,55 +324,29 @@ jobs:
           make ARCH=arm64 O=out olddefconfig
           echo "✅ Kernel configuration complete"
 
-      - name: "🔍 Debug Toolchain"
+      - name: "🔨 Build Kernel"
         run: |
-              cd kernel_workspace
-              LLVM_PATH=$(ls -d prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
-              echo "LLVM_PATH: $LLVM_PATH"
-              ls -la "$LLVM_PATH" | head -20
-              
-              export PATH="$LLVM_PATH:$PATH"
-              
-              echo "=== Tool Locations ==="
-              which clang || echo "clang NOT FOUND"
-              which ld.lld || echo "ld.lld NOT FOUND"
-              which llvm-ar || echo "llvm-ar NOT FOUND"
-              
-              echo "=== Versions ==="
-              clang --version | head -2
-              ld.lld --version | head -1
-              
-              echo "=== Kernel Config Check ==="
-              cat common/out/.config | grep -E "^CONFIG_KSU|^CONFIG_SUSFS" | head -20
-              
-              
-      - name: "🔨 Build Kernel (Debug)"
-        run: |
-          set -x  # Echo all commands
+          set -e
           cd kernel_workspace/common
           
-          LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
-          export PATH="$LLVM_PATH:$PATH"
+          # Use absolute LLVM_PATH from environment (set in Clone step)
+          export PATH="/usr/lib/ccache:${{ env.LLVM_PATH }}:$PATH"
           
-          export HOSTCC=clang
-          export HOSTCXX=clang++
-          export HOSTLD=ld.lld
-          export LD=ld.lld
-          export AR=llvm-ar
-          export NM=llvm-nm
-          export OBJCOPY=llvm-objcopy
-          export OBJDUMP=llvm-objdump
-          export STRIP=llvm-strip
+          echo "📋 Build environment:"
+          echo "  LLVM_PATH: ${{ env.LLVM_PATH }}"
+          echo "  clang: $(which clang)"
+          echo "  ld.lld: $(which ld.lld)"
+          echo "  llvm-nm: $(which llvm-nm)"
+          echo "  llvm-objcopy: $(which llvm-objcopy)"
+          echo "  llvm-readelf: $(which llvm-readelf)"
           
-          # Build with verbose output, no parallel jobs to see exact error
-          make V=1 -j1 \
+          make -j$(nproc --all) \
             LLVM=1 \
             LLVM_IAS=1 \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            HOSTLD=ld.lld \
-            LD=ld.lld \
-            O=out 2>&1 | tail -200
+            CC="ccache clang" \
+            O=out
           
           ccache -s
           echo "✅ Kernel build complete"
