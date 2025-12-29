@@ -260,8 +260,20 @@ jobs:
           # Copy compression patches (these are fine from kernel_patches)
           # ============================================================
           cp ../kernel_patches/zram/001-lz4.patch ./ 2>/dev/null || true
-          cp ../kernel_patches/zram/lz4armv8.S ./lib/ 2>/dev/null || true
           cp ../kernel_patches/zram/002-zstd.patch ./ 2>/dev/null || true
+          
+          # Copy lz4armv8 directory structure correctly
+          if [ -d "../kernel_patches/zram/lz4armv8" ]; then
+            echo "📦 Copying lz4armv8 directory..."
+            mkdir -p ./lib/lz4/lz4armv8
+            cp -rv ../kernel_patches/zram/lz4armv8/* ./lib/lz4/lz4armv8/ 2>/dev/null || true
+          fi
+          
+          # Also copy single file if exists (fallback)
+          if [ -f "../kernel_patches/zram/lz4armv8.S" ]; then
+            mkdir -p ./lib/lz4/lz4armv8
+            cp -v ../kernel_patches/zram/lz4armv8.S ./lib/lz4/lz4armv8/ 2>/dev/null || true
+          fi
           
           # lz4k files from SukiSU are okay (these are compression, not SUSFS)
           if [ "${{ github.event.inputs.lz4kd }}" == "On" ]; then
@@ -279,9 +291,10 @@ jobs:
             patch -p1 -F 3 < 002-zstd.patch 2>/dev/null || true
           fi
           
+          # Skip lz4 patch for 6.6 - the lz4armv8 acceleration files are missing
+          # and the stock kernel lz4 is sufficient
           if [ "${{ github.event.inputs.lz4kd }}" = "Off" ] && [ "${{ github.event.inputs.KERNEL_VERSION }}" = "6.6" ]; then
-            echo "📦 Applying lz4 patch..."
-            patch -p1 -F 3 < 001-lz4.patch 2>/dev/null || true
+            echo "⏭️ Skipping lz4 patch for 6.6 (lz4armv8 files not available)"
           fi
           
           if [ "${{ github.event.inputs.lz4kd }}" == "On" ]; then
