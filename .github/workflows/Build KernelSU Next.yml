@@ -350,18 +350,16 @@ jobs:
               
               echo "=== Kernel Config Check ==="
               cat common/out/.config | grep -E "^CONFIG_KSU|^CONFIG_SUSFS" | head -20
-
-      - name: "🔨 Build Kernel"
+              
+              
+      - name: "🔨 Build Kernel (Debug)"
         run: |
-          set -e
+          set -x  # Echo all commands
           cd kernel_workspace/common
           
           LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
-          export PATH="/usr/lib/ccache:$LLVM_PATH:$PATH"
+          export PATH="$LLVM_PATH:$PATH"
           
-          # ============================================================
-          # FIX: Set LLVM tools explicitly to prevent "ld.lld not found"
-          # ============================================================
           export HOSTCC=clang
           export HOSTCXX=clang++
           export HOSTLD=ld.lld
@@ -372,27 +370,15 @@ jobs:
           export OBJDUMP=llvm-objdump
           export STRIP=llvm-strip
           
-          echo "📋 Build environment:"
-          echo "  LLVM_PATH: $LLVM_PATH"
-          echo "  ld.lld: $(which ld.lld)"
-          echo "  clang: $(which clang)"
-          
-          make -j$(nproc --all) \
+          # Build with verbose output, no parallel jobs to see exact error
+          make V=1 -j1 \
             LLVM=1 \
             LLVM_IAS=1 \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="ccache clang" \
-            HOSTCC=clang \
-            HOSTCXX=clang++ \
             HOSTLD=ld.lld \
             LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            O=out
+            O=out 2>&1 | tail -200
           
           ccache -s
           echo "✅ Kernel build complete"
