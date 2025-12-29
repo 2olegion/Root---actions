@@ -368,7 +368,7 @@ jobs:
           # The BPF verifier uses ~2400 bytes which exceeds default 2048
           # ============================================================
           ./scripts/config --file out/.config \
-            --set-val CONFIG_FRAME_WARN 4096
+            --set-val CONFIG_FRAME_WARN 0
           
           # BBR support if enabled
           if [ "${{ github.event.inputs.bbr }}" == "On" ]; then
