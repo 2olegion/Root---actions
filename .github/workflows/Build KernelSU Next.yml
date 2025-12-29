@@ -219,85 +219,53 @@ jobs:
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
           git clone https://github.com/Xiaomichael/kernel_patches.git
           
-          # Try susfs4ksu but have fallback
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }} || {
-            echo "⚠️ susfs4ksu branch not found, trying main..."
-            git clone https://gitlab.com/simonpunk/susfs4ksu.git
-          }
+          # Clone susfs4ksu with the correct branch for KernelSU-Next
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}
           
           cd ./common
           
           # ============================================================
-          # Use SukiSU SUSFS patches - more complete for newer kernels
+          # Copy SUSFS source files from susfs4ksu
           # ============================================================
-          echo "📋 Checking available SukiSU SUSFS patches..."
-          ls -la ../SukiSU_patch/susfs_patches/ 2>/dev/null || true
+          echo "📝 Copying SUSFS files from susfs4ksu..."
+          echo "📋 Available in susfs4ksu/kernel_patches:"
+          ls -la ../susfs4ksu/kernel_patches/ || true
+          ls -la ../susfs4ksu/kernel_patches/fs/ 2>/dev/null || true
+          ls -la ../susfs4ksu/kernel_patches/include/linux/ 2>/dev/null || true
           
-          SUSFS_PATCH=""
-          # Try to find the right patch
-          if [ -f "../SukiSU_patch/susfs_patches/${{ github.event.inputs.KERNEL_VERSION }}/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch" ]; then
-            SUSFS_PATCH="../SukiSU_patch/susfs_patches/${{ github.event.inputs.KERNEL_VERSION }}/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch"
-          elif [ -f "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch" ]; then
-            SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch"
-          fi
-          
-          # ============================================================
-          # Copy SUSFS source files from SukiSU first (more complete)
-          # ============================================================
-          echo "📝 Copying SUSFS files from SukiSU..."
-          
-          # Check SukiSU structure
-          if [ -d "../SukiSU_patch/susfs_patches/${{ github.event.inputs.KERNEL_VERSION }}" ]; then
-            echo "Found SukiSU susfs patches for ${{ github.event.inputs.KERNEL_VERSION }}"
-            ls -la "../SukiSU_patch/susfs_patches/${{ github.event.inputs.KERNEL_VERSION }}/"
-            
-            # Copy fs files
-            if [ -d "../SukiSU_patch/susfs_patches/${{ github.event.inputs.KERNEL_VERSION }}/fs" ]; then
-              cp -rv ../SukiSU_patch/susfs_patches/${{ github.event.inputs.KERNEL_VERSION }}/fs/* fs/ 2>/dev/null || true
-            fi
-            
-            # Copy include files
-            if [ -d "../SukiSU_patch/susfs_patches/${{ github.event.inputs.KERNEL_VERSION }}/include" ]; then
-              cp -rv ../SukiSU_patch/susfs_patches/${{ github.event.inputs.KERNEL_VERSION }}/include/* include/ 2>/dev/null || true
-            fi
-          fi
-          
-          # Also copy from susfs4ksu as fallback
-          echo "📝 Copying additional files from susfs4ksu..."
-          cp -v ../susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
+          # Copy all header files
           cp -v ../susfs4ksu/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
           
-          # ============================================================
-          # Check KernelSU-Next for SUSFS definitions
-          # The dev-susfs branch should have these built-in
-          # ============================================================
-          echo "📋 Checking KernelSU-Next for SUSFS headers..."
-          if [ -d "../KernelSU-Next/kernel/include" ]; then
-            ls -la ../KernelSU-Next/kernel/include/ 2>/dev/null || true
-            cp -v ../KernelSU-Next/kernel/include/linux/susfs*.h include/linux/ 2>/dev/null || true
-          fi
+          # Copy fs source files
+          cp -v ../susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
           
           # ============================================================
-          # Apply SUSFS patch
+          # Apply SUSFS patch from susfs4ksu
           # ============================================================
-          if [ -n "$SUSFS_PATCH" ] && [ -f "$SUSFS_PATCH" ]; then
-            echo "🔧 Applying SUSFS patch: $SUSFS_PATCH"
+          SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch"
+          
+          if [ -f "$SUSFS_PATCH" ]; then
+            echo "🔧 Applying SUSFS patch..."
             patch -p1 -F 3 < "$SUSFS_PATCH" || {
-              echo "⚠️ Patch had issues, continuing anyway..."
+              echo "⚠️ Patch had issues, showing rejections..."
+              find . -name "*.rej" -exec echo "=== {} ===" \; -exec cat {} \; 2>/dev/null || true
             }
           else
-            echo "⚠️ No SUSFS patch found, SUSFS features may not work!"
+            echo "❌ SUSFS patch not found: $SUSFS_PATCH"
+            echo "Available patches:"
+            ls ../susfs4ksu/kernel_patches/*.patch 2>/dev/null || true
           fi
           
           # ============================================================
-          # Copy compression patches
+          # Copy compression patches (these are fine from kernel_patches)
           # ============================================================
           cp ../kernel_patches/zram/001-lz4.patch ./ 2>/dev/null || true
           cp ../kernel_patches/zram/lz4armv8.S ./lib/ 2>/dev/null || true
           cp ../kernel_patches/zram/002-zstd.patch ./ 2>/dev/null || true
           
+          # lz4k files from SukiSU are okay (these are compression, not SUSFS)
           if [ "${{ github.event.inputs.lz4kd }}" == "On" ]; then
-            echo "📦 Copying lz4k files..."
+            echo "📦 Copying lz4k compression files..."
             cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/ 2>/dev/null || true
             cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./lib/ 2>/dev/null || true
             cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto/ 2>/dev/null || true
@@ -327,62 +295,14 @@ jobs:
           fi
           
           # ============================================================
-          # Create missing susfs_def.h if needed
+          # Verification
           # ============================================================
-          if [ ! -f include/linux/susfs_def.h ]; then
-            echo "⚠️ Creating minimal susfs_def.h..."
-            cat > include/linux/susfs_def.h << 'EOF'
-          #ifndef _LINUX_SUSFS_DEF_H
-          #define _LINUX_SUSFS_DEF_H
-          
-          /* SUSFS definitions - auto-generated */
-          #include <linux/types.h>
-          
-          #define SUSFS_MAX_SUS_MNTS 64
-          #define SUSFS_MAX_SUS_PATHS 256
-          #define SUSFS_MAX_SUS_PATH_LEN 256
-          #define SUSFS_MAX_SUS_KSTATS 64
-          #define SUSFS_MAX_SUS_MAPS 64
-          #define SUSFS_MAX_TRY_UMOUNT_PATHS 16
-          
-          #define BIT_SUS_MAPS (1 << 0)
-          
-          #endif /* _LINUX_SUSFS_DEF_H */
-          EOF
-            echo "✅ Created susfs_def.h"
-          fi
-          
-          # ============================================================
-          # Fix missing includes in source files
-          # ============================================================
-          echo "🔧 Fixing source file includes..."
-          
-          # Fix fs/notify/fdinfo.c
-          if grep -q '#include <linux/susfs_def.h>' fs/notify/fdinfo.c; then
-            # Check if susfs.h includes susfs_def.h or vice versa
-            if grep -q 'susfs_def.h' include/linux/susfs.h 2>/dev/null; then
-              sed -i 's|#include <linux/susfs_def.h>|#include <linux/susfs.h>|g' fs/notify/fdinfo.c
-            fi
-          fi
-          
-          # Add susfs.h include to fs/proc/base.c if needed
-          if ! grep -q '#include <linux/susfs.h>' fs/proc/base.c && ! grep -q '#include <linux/susfs_def.h>' fs/proc/base.c; then
-            sed -i '/#include <linux\/fs_struct.h>/a #include <linux/susfs.h>' fs/proc/base.c 2>/dev/null || \
-            sed -i '/#include <linux\/mm.h>/a #include <linux/susfs.h>' fs/proc/base.c 2>/dev/null || true
-          fi
-          
-          # ============================================================
-          # Final verification
-          # ============================================================
-          echo "🔍 Final verification..."
-          echo "SUSFS headers:"
-          ls -la include/linux/susfs* 2>/dev/null || echo "No susfs headers!"
+          echo "🔍 Verifying SUSFS setup..."
+          echo "Headers:"
+          ls -la include/linux/susfs* 2>/dev/null || echo "No susfs headers found"
           echo ""
-          echo "Checking for BIT_SUS_MAPS:"
-          grep -rn "BIT_SUS_MAPS" include/linux/ 2>/dev/null | head -3 || echo "Not found in headers"
-          echo ""
-          echo "Checking fs/susfs.c:"
-          ls -la fs/susfs.c 2>/dev/null || echo "fs/susfs.c not found!"
+          echo "Source:"
+          ls -la fs/susfs* 2>/dev/null || echo "No susfs source found"
           
           echo "✅ SUSFS setup complete"
 
@@ -532,3 +452,5 @@ jobs:
         with:
           name: ${{ steps.set_name.outputs.ARTIFACT_NAME }}
           path: ./AnyKernel3/*
+
+
