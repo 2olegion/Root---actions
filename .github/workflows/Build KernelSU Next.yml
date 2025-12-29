@@ -330,6 +330,27 @@ jobs:
           make ARCH=arm64 O=out olddefconfig
           echo "✅ Kernel configuration complete"
 
+      - name: "🔍 Debug Toolchain"
+        run: |
+              cd kernel_workspace
+              LLVM_PATH=$(ls -d prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
+              echo "LLVM_PATH: $LLVM_PATH"
+              ls -la "$LLVM_PATH" | head -20
+              
+              export PATH="$LLVM_PATH:$PATH"
+              
+              echo "=== Tool Locations ==="
+              which clang || echo "clang NOT FOUND"
+              which ld.lld || echo "ld.lld NOT FOUND"
+              which llvm-ar || echo "llvm-ar NOT FOUND"
+              
+              echo "=== Versions ==="
+              clang --version | head -2
+              ld.lld --version | head -1
+              
+              echo "=== Kernel Config Check ==="
+              cat common/out/.config | grep -E "^CONFIG_KSU|^CONFIG_SUSFS" | head -20
+
       - name: "🔨 Build Kernel"
         run: |
           set -e
