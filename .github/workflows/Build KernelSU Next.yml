@@ -174,10 +174,14 @@ jobs:
           clang --version
           ld.lld --version
 
+          cd common
+          
           make ARCH=arm64 O=out gki_defconfig
+          
           ./scripts/config --file out/.config \
             --disable LOCALVERSION_AUTO \
             --set-val KSU_KPROBES_HOOK n
+          
           make ARCH=arm64 O=out olddefconfig
           
           echo "✅ 内核配置完成"
