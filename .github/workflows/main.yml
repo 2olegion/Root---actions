@@ -1,0 +1,470 @@
+name: test1 KernelSU Next
+
+on:
+  workflow_dispatch:
+    inputs:
+      ANDROID_VERSION:
+        description: "Android KMI Version"
+        required: true
+        type: choice
+        options:
+          - 'android15'
+          - 'android14'
+          - 'android13'
+          - 'android12'
+        default: 'android15'
+      
+      KERNEL_VERSION:
+        description: "Kernel Version"
+        required: true
+        type: choice
+        options:
+          - '6.6'
+          - '6.1'
+          - '5.15'
+          - '5.10'
+        default: '6.6'
+      
+      FEIL:
+        description: "Device Manifest (default.xml etc.)"
+        required: false
+        default: 'default'
+      
+      lz4kd:
+        description: "Enable lz4kd (Off: 6.1=lz4+zstd, 6.6=lz4)"
+        required: true
+        type: choice
+        options:
+          - 'On'
+          - 'Off'
+        default: 'Off'
+      
+      bbr:
+        description: "Enable BBR TCP Congestion Control"
+        required: true
+        type: choice
+        options:
+          - 'On'
+          - 'Off'
+        default: 'On'
+      
+      bbg:
+        description: "Enable Baseband Guard Protection"
+        required: true
+        type: choice
+        options:
+          - 'On'
+          - 'Off'
+        default: 'On'
+      
+      proxy:
+        description: "Enable Proxy Optimization (disable for MediaTek!)"
+        required: true
+        type: choice
+        options:
+          - 'On'
+          - 'Off'
+        default: 'On'
+
+jobs:
+  build:
+    name: Build ${{ github.event.inputs.FEIL }} | lz4kd=${{ github.event.inputs.lz4kd }}
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+      CCACHE_MAXSIZE: 8G
+
+    steps:
+      # ====================== System Initialization ======================
+      - name: "🚀 Maximize Build Space"
+        if: ${{ github.event.inputs.KERNEL_VERSION == '5.10' || github.event.inputs.KERNEL_VERSION == '5.15' }}
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: "⚙️ Setup Cache Environment"
+        run: |
+          echo "🔧 Setting up isolated cache directory..."
+          echo "CCACHE_DIR=$HOME/.ccache_${{ github.event.inputs.FEIL }}_Next" >> $GITHUB_ENV
+          mkdir -p "$HOME/.ccache_${{ github.event.inputs.FEIL }}_Next"
+          echo "✅ Cache directory set: $HOME/.ccache_${{ github.event.inputs.FEIL }}_Next"
+
+      - name: "🔐 Configure Git"
+        run: |
+          echo "🔧 Configuring Git user..."
+          git config --global user.name "build"
+          git config --global user.email "build@github.actions"
+          echo "✅ Git configured"
+
+      # ====================== Dependency Management ======================
+      - name: "📦 Cache & Install Build Dependencies"
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: python3 git curl ccache libelf-dev build-essential flex bison libssl-dev libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix lld
+          execute_install_scripts: true
+
+      # ====================== Cache Management ======================
+      - name: "💾 Restore ccache"
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.ref }}-${{ github.event.inputs.FEIL }}-Next-SUSFS-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ github.ref }}-${{ github.event.inputs.FEIL }}-Next-SUSFS
+            ccache-${{ runner.os }}-${{ github.event.inputs.FEIL }}-Next-SUSFS
+            ccache-${{ runner.os }}-Next-SUSFS
+
+      - name: "⚙️ Initialize ccache"
+        run: |
+          echo "🔧 Initializing ccache..."
+          INIT_FLAG="${{ env.CCACHE_DIR }}/.ccache_initialized"
+          
+          if command -v ccache >/dev/null 2>&1; then
+            if [ ! -f "$INIT_FLAG" ]; then
+              mkdir -p "${{ env.CCACHE_DIR }}"
+              ccache -M ${{ env.CCACHE_MAXSIZE }}
+              touch "$INIT_FLAG"
+              echo "🆕 ccache initialized"
+            else
+              echo "ℹ️ ccache already exists, skipping init"
+            fi
+          else
+            echo "⚠️ ccache not found, skipping init"
+          fi
+          ccache -s
+          echo "✅ ccache initialization complete"
+
+      # ====================== Source Preparation ======================
+      - name: "📥 Install Repo Tool"
+        run: |
+          echo "⬇️ Downloading repo tool..."
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          chmod a+x ~/repo
+          sudo mv ~/repo /usr/local/bin/repo
+          echo "✅ Repo tool installed"
+
+      - name: "⬇️ Clone Kernel Source"
+        run: |
+          mkdir kernel_workspace && cd kernel_workspace
+          
+          # Build the branch name from inputs
+          BRANCH="common-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}"
+          echo "🌐 Initializing kernel repository with branch: $BRANCH"
+          
+          repo init -u https://android.googlesource.com/kernel/manifest \
+            -b "$BRANCH" \
+            -m ${{ github.event.inputs.FEIL || 'default' }}.xml \
+            --depth=1
+          
+          echo "🔄 Syncing codebase (using $(nproc --all) threads)..."
+          repo sync -c -j$(nproc --all) --no-tags --no-clone-bundle --force-sync
+          
+          # Find and verify LLVM toolchain - USE ABSOLUTE PATH!
+          LLVM_PATH=$(realpath prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
+          
+          if [ -z "$LLVM_PATH" ]; then
+            echo "❌ Google LLVM toolchain not found!"
+            ls -la prebuilts/clang/host/linux-x86/ || true
+            exit 1
+          fi
+          
+          # Save absolute path for other steps
+          echo "LLVM_PATH=$LLVM_PATH" >> $GITHUB_ENV
+          export PATH="$LLVM_PATH:$PATH"
+          
+          # Verify tools
+          echo "📋 Toolchain verification:"
+          which clang && clang --version | head -1
+          which ld.lld && ld.lld --version | head -1
+          which llvm-nm && echo "llvm-nm OK"
+          which llvm-objcopy && echo "llvm-objcopy OK"
+          which llvm-readelf && echo "llvm-readelf OK"
+          
+          echo "✅ Kernel source cloned successfully"
+
+      # ====================== Kernel Customization ======================
+      - name: "⚡ Setup Baseband-guard"
+        if: ${{ github.event.inputs.bbg == 'On' }}
+        run: |
+          set -e
+          cd kernel_workspace/common
+          echo "🛠️ Setting up BBG..."
+          curl -sSL https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh -o setup.sh
+          bash setup.sh
+          echo "✅ Baseband-guard setup complete"
+
+      - name: "⚡ Setup KernelSU Next"
+        run: |
+          cd kernel_workspace/
+          echo "🛠️ Setting up KernelSU Next..."
+          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+          
+          cd KernelSU-Next
+          KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/commits?sha=dev&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
+          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          sed -i "s/DKSU_VERSION=11998/DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile
+          echo "✅ KernelSU Next configured (Version: $KSU_VERSION)"
+
+      - name: "🔧 Setup SUSFS"
+        run: |
+          cd kernel_workspace
+          echo "⬇️ Downloading patches..."
+          git clone https://github.com/ShirkNeko/SukiSU_patch.git
+          git clone https://github.com/Xiaomichael/kernel_patches.git
+          
+          # Clone susfs4ksu with the correct branch for KernelSU-Next
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}
+          
+          cd ./common
+          
+          # ============================================================
+          # Copy SUSFS source files from susfs4ksu
+          # ============================================================
+          echo "📝 Copying SUSFS files from susfs4ksu..."
+          echo "📋 Available in susfs4ksu/kernel_patches:"
+          ls -la ../susfs4ksu/kernel_patches/ || true
+          ls -la ../susfs4ksu/kernel_patches/fs/ 2>/dev/null || true
+          ls -la ../susfs4ksu/kernel_patches/include/linux/ 2>/dev/null || true
+          
+          # Copy all header files
+          cp -v ../susfs4ksu/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
+          
+          # Copy fs source files
+          cp -v ../susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
+          
+          # ============================================================
+          # Apply SUSFS patch from susfs4ksu
+          # ============================================================
+          SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch"
+          
+          if [ -f "$SUSFS_PATCH" ]; then
+            echo "🔧 Applying SUSFS patch..."
+            patch -p1 -F 3 < "$SUSFS_PATCH" || {
+              echo "⚠️ Patch had issues, showing rejections..."
+              find . -name "*.rej" -exec echo "=== {} ===" \; -exec cat {} \; 2>/dev/null || true
+            }
+          else
+            echo "❌ SUSFS patch not found: $SUSFS_PATCH"
+            echo "Available patches:"
+            ls ../susfs4ksu/kernel_patches/*.patch 2>/dev/null || true
+          fi
+          
+          # ============================================================
+          # Copy compression patches (these are fine from kernel_patches)
+          # ============================================================
+          cp ../kernel_patches/zram/001-lz4.patch ./ 2>/dev/null || true
+          cp ../kernel_patches/zram/002-zstd.patch ./ 2>/dev/null || true
+          
+          # Copy lz4armv8 directory structure correctly
+          if [ -d "../kernel_patches/zram/lz4armv8" ]; then
+            echo "📦 Copying lz4armv8 directory..."
+            mkdir -p ./lib/lz4/lz4armv8
+            cp -rv ../kernel_patches/zram/lz4armv8/* ./lib/lz4/lz4armv8/ 2>/dev/null || true
+          fi
+          
+          # Also copy single file if exists (fallback)
+          if [ -f "../kernel_patches/zram/lz4armv8.S" ]; then
+            mkdir -p ./lib/lz4/lz4armv8
+            cp -v ../kernel_patches/zram/lz4armv8.S ./lib/lz4/lz4armv8/ 2>/dev/null || true
+          fi
+          
+          # lz4k files from SukiSU are okay (these are compression, not SUSFS)
+          if [ "${{ github.event.inputs.lz4kd }}" == "On" ]; then
+            echo "📦 Copying lz4k compression files..."
+            cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/ 2>/dev/null || true
+            cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./lib/ 2>/dev/null || true
+            cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto/ 2>/dev/null || true
+            cp -r ../SukiSU_patch/other/zram/lz4k_oplus ./lib/ 2>/dev/null || true
+          fi
+          
+          echo "🔧 Applying compression patches..."
+          if [ "${{ github.event.inputs.lz4kd }}" = "Off" ] && [ "${{ github.event.inputs.KERNEL_VERSION }}" = "6.1" ]; then
+            echo "📦 Applying lz4+zstd patches..."
+            patch -p1 -F 3 < 001-lz4.patch 2>/dev/null || true
+            patch -p1 -F 3 < 002-zstd.patch 2>/dev/null || true
+          fi
+          
+          # Skip lz4 patch for 6.6 - the lz4armv8 acceleration files are missing
+          # and the stock kernel lz4 is sufficient
+          if [ "${{ github.event.inputs.lz4kd }}" = "Off" ] && [ "${{ github.event.inputs.KERNEL_VERSION }}" = "6.6" ]; then
+            echo "⏭️ Skipping lz4 patch for 6.6 (lz4armv8 files not available)"
+          fi
+          
+          if [ "${{ github.event.inputs.lz4kd }}" == "On" ]; then
+            echo "🚀 Applying lz4kd patches..."
+            if [ -f "../SukiSU_patch/other/zram/zram_patch/${{ github.event.inputs.KERNEL_VERSION }}/lz4kd.patch" ]; then
+              patch -p1 -F 3 < ../SukiSU_patch/other/zram/zram_patch/${{ github.event.inputs.KERNEL_VERSION }}/lz4kd.patch || true
+            fi
+            if [ -f "../SukiSU_patch/other/zram/zram_patch/${{ github.event.inputs.KERNEL_VERSION }}/lz4k_oplus.patch" ]; then
+              patch -p1 -F 3 < ../SukiSU_patch/other/zram/zram_patch/${{ github.event.inputs.KERNEL_VERSION }}/lz4k_oplus.patch || true
+            fi
+          fi
+          
+          # ============================================================
+          # Verification
+          # ============================================================
+          echo "🔍 Verifying SUSFS setup..."
+          echo "Headers:"
+          ls -la include/linux/susfs* 2>/dev/null || echo "No susfs headers found"
+          echo ""
+          echo "Source:"
+          ls -la fs/susfs* 2>/dev/null || echo "No susfs source found"
+          
+          echo "✅ SUSFS setup complete"
+
+      - name: "⚙️ Configure Kernel (KSU + SUSFS)"
+        run: |
+          set -e
+          cd kernel_workspace/common
+          
+          # Use absolute LLVM_PATH from environment
+          export PATH="${{ env.LLVM_PATH }}:$PATH"
+          
+          echo "📋 Verifying tools in PATH:"
+          which clang
+          which ld.lld
+          which llvm-nm
+          
+          # Create output directory and generate base config
+          mkdir -p out
+          make ARCH=arm64 O=out gki_defconfig
+          
+          # Basic kernel settings
+          ./scripts/config --file out/.config \
+            --disable LOCALVERSION_AUTO \
+            --set-val KSU_KPROBES_HOOK n
+          
+          # Enable KSU
+          ./scripts/config --file out/.config --enable CONFIG_KSU
+          
+          # Enable SUSFS features
+          ./scripts/config --file out/.config \
+            --enable CONFIG_KSU_SUSFS \
+            --enable CONFIG_KSU_SUSFS_SUS_PATH \
+            --enable CONFIG_KSU_SUSFS_SUS_MOUNT \
+            --enable CONFIG_KSU_SUSFS_SUS_KSTAT \
+            --enable CONFIG_KSU_SUSFS_SPOOF_UNAME \
+            --enable CONFIG_KSU_SUSFS_ENABLE_LOG \
+            --enable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            --enable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+            --enable CONFIG_KSU_SUSFS_SUS_MAP
+          
+          # Additional kernel options
+          ./scripts/config --file out/.config \
+            --enable CONFIG_TMPFS_XATTR \
+            --enable CONFIG_TMPFS_POSIX_ACL \
+            --enable CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE
+          
+          # ============================================================
+          # FIX: Increase frame warning limit for BPF verifier
+          # The BPF verifier uses ~2400 bytes which exceeds default 2048
+          # ============================================================
+          ./scripts/config --file out/.config \
+            --set-val CONFIG_FRAME_WARN 0
+          
+          # BBR support if enabled
+          if [ "${{ github.event.inputs.bbr }}" == "On" ]; then
+            ./scripts/config --file out/.config \
+              --enable CONFIG_TCP_CONG_BBR \
+              --enable CONFIG_NET_SCH_FQ \
+              --set-str CONFIG_DEFAULT_TCP_CONG bbr
+          fi
+          
+          make ARCH=arm64 O=out olddefconfig
+          
+          # Verify critical configs
+          echo "📋 Verifying kernel config:"
+          grep -E "CONFIG_KSU=|CONFIG_KSU_SUSFS=|CONFIG_FRAME_WARN=" out/.config || true
+          
+          echo "✅ Kernel configuration complete"
+
+      - name: "🔨 Build Kernel"
+        run: |
+          set -e
+          cd kernel_workspace/common
+          
+          # Use absolute LLVM_PATH from environment (set in Clone step)
+          export PATH="/usr/lib/ccache:${{ env.LLVM_PATH }}:$PATH"
+          
+          echo "📋 Build environment:"
+          echo "  LLVM_PATH: ${{ env.LLVM_PATH }}"
+          echo "  clang: $(which clang)"
+          echo "  ld.lld: $(which ld.lld)"
+          echo "  llvm-nm: $(which llvm-nm)"
+          echo "  llvm-objcopy: $(which llvm-objcopy)"
+          echo "  llvm-readelf: $(which llvm-readelf)"
+          
+           make -j$(nproc --all) \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CC="ccache clang" \
+            KCFLAGS="-Wno-frame-larger-than" \
+            O=out
+                  
+          ccache -s
+          echo "✅ Kernel build complete"
+
+      - name: "📦 Package Kernel"
+        run: |
+          echo "📦 Preparing AnyKernel3 packaging..."
+          git clone https://github.com/Xiaomichael/AnyKernel3 --depth=1
+          rm -rf ./AnyKernel3/.git
+          
+          mkdir -p kernel_workspace/out/Final-Image-Find/
+          
+          image_path=$(find "./kernel_workspace/common/out/" -name "Image" | head -n 1)
+          
+          if [ -n "$image_path" ] && [ -f "$image_path" ]; then
+            echo "✅ Found Image at: $image_path"
+            cp "$image_path" ./AnyKernel3/Image
+            cp "$image_path" kernel_workspace/out/Final-Image-Find/Image
+          else
+            echo "❌ Image not found!"
+            find ./kernel_workspace/common/out/ -name "Image*" || true
+            exit 1
+          fi
+          
+          echo "✅ Kernel packaged successfully"
+
+      # ====================== Upload Phase ======================
+      - name: "🧠 Set Artifact Name"
+        id: set_name
+        run: |
+          BASE="${{ github.event.inputs.FEIL }}_KernelSU_Next"
+          
+          if [ "${{ github.event.inputs.lz4kd }}" = "On" ]; then
+            SUFFIX="lz4kd"
+          elif [ "${{ github.event.inputs.KERNEL_VERSION }}" = "6.1" ]; then
+            SUFFIX="lz4_zstd"
+          elif [ "${{ github.event.inputs.KERNEL_VERSION }}" = "6.6" ]; then
+            SUFFIX="lz4"
+          else
+            SUFFIX=""
+          fi
+          
+          if [ -n "$SUFFIX" ]; then
+            ARTIFACT_NAME="${BASE}_${SUFFIX}_${{ env.KSUVER }}"
+          else
+            ARTIFACT_NAME="${BASE}_${{ env.KSUVER }}"
+          fi
+          
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          echo "📦 Artifact name: $ARTIFACT_NAME"
+
+      - name: "📤 Upload AnyKernel3"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.set_name.outputs.ARTIFACT_NAME }}
+          path: ./AnyKernel3/*
+
+
