@@ -156,6 +156,25 @@ jobs:
           --depth=1
           echo "🔄 同步代码库(使用$(nproc --all)线程)..."
           repo sync -c -j$(nproc --all) --no-tags --no-clone-bundle --force-sync
+
+          # LLVM in PATH
+          export LLVM_PATH=$(realpath prebuilts/clang/host/linux-x86/clang-*/bin)
+          export PATH="$LLVM_PATH:$PATH"
+          
+          # optional Debug
+          which clang
+          which ld.lld
+          
+          # Defconfig
+          make ARCH=arm64 O=out gki_defconfig
+          
+          # Config tweaks
+          ./scripts/config --file out/.config \
+            --disable LOCALVERSION_AUTO \
+            --set-val KSU_KPROBES_HOOK n
+          
+          # Finalisieren
+          make ARCH=arm64 O=out olddefconfig
           
           echo "✅ 内核配置完成"
 
