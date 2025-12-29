@@ -267,9 +267,9 @@ jobs:
           
           echo "✅ 所有补丁应用完成"
 
-           - name: "⚙️ Configure Kernel (KSU + SUSFS)"
-            run: |
-              set -e
+      - name: "⚙️ Configure Kernel (KSU + SUSFS)"
+        run: |
+          set -e
               cd kernel_workspace/common
           
               # LLVM in PATH
@@ -316,23 +316,23 @@ jobs:
           sed -i 's/check_defconfig//' ./common/build.config.gki
           echo "✅ 内核配置更新完成"
          
-          - name: "🔨 Build Kernel | 编译内核"
-          run: |
-            set -e
-            sudo apt update
-            sudo apt install -y libelf-dev
-        
-            cd kernel_workspace/common
-        
-            LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
-            export PATH="/usr/lib/ccache:$LLVM_PATH:$PATH"
-        
-            make -j$(nproc --all) \
-              LLVM=1 ARCH=arm64 \
-              CROSS_COMPILE=aarch64-linux-gnu- \
-              CC="ccache clang" \
-              LD=ld.lld HOSTLD=ld.lld \
-              O=out
+      - name: "🔨 Build Kernel | 编译内核"
+        run: |
+          set -e
+          sudo apt update
+          sudo apt install -y libelf-dev
+      
+          cd kernel_workspace/common
+      
+          LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
+          export PATH="/usr/lib/ccache:$LLVM_PATH:$PATH"
+      
+          make -j$(nproc --all) \
+            LLVM=1 ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CC="ccache clang" \
+            LD=ld.lld HOSTLD=ld.lld \
+            O=out
           
           # 显示ccache统计信息
           ccache -s
