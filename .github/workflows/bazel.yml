@@ -1,4 +1,4 @@
-name: "Build (Bazel GKI)"
+name: "Build KernelSU-Next (Bazel GKI)"
 
 on:
   workflow_dispatch:
@@ -111,16 +111,20 @@ jobs:
           cd kernel_workspace
           
           echo "⬇️ Cloning KernelSU-Next..."
-          if [ "${{ github.event.inputs.ENABLE_SUSFS }}" == "true" ]; then
-            git clone https://github.com/KernelSU-Next/KernelSU-Next.git -b dev KernelSU-Next
-          else
-            git clone https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
-          fi
+          git clone https://github.com/KernelSU-Next/KernelSU-Next.git -b dev KernelSU-Next
+          
+          echo "📋 KernelSU-Next kernel directory:"
+          ls -la KernelSU-Next/kernel/
           
           cd common
           
-          # Setup KernelSU symlink
-          ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+          # Setup KernelSU symlink (from common/drivers/, need ../../KernelSU-Next/kernel)
+          ln -sf ../../KernelSU-Next/kernel drivers/kernelsu
+          
+          # Verify symlink
+          echo "📋 Verifying symlink:"
+          ls -la drivers/kernelsu
+          ls -la drivers/kernelsu/ || { echo "❌ Symlink broken!"; exit 1; }
           
           # Add KernelSU to drivers Makefile
           if ! grep -q "kernelsu" drivers/Makefile; then
@@ -133,7 +137,6 @@ jobs:
           fi
           
           echo "✅ KernelSU-Next setup complete"
-          ls -la drivers/kernelsu/
 
       - name: "🔧 Setup SUSFS"
         if: ${{ github.event.inputs.ENABLE_SUSFS == 'true' }}
