@@ -267,37 +267,37 @@ jobs:
           
           echo "✅ 所有补丁应用完成"
 
-          - name: "⚙️ Configure Kernel (KSU + SUSFS)"
-            run: |
-              set -e
-              cd kernel_workspace/common
+      - name: "⚙️ Configure Kernel (KSU + SUSFS)"
+        run: |
+            set -e
+            cd kernel_workspace/common
           
-              LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
-              export PATH="$LLVM_PATH:$PATH"
+            LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
+            export PATH="$LLVM_PATH:$PATH"
           
-              make ARCH=arm64 O=out gki_defconfig
+            make ARCH=arm64 O=out gki_defconfig
           
-              ./scripts/config --file out/.config --enable CONFIG_KSU
+            ./scripts/config --file out/.config --enable CONFIG_KSU
           
-              ./scripts/config --file out/.config \
-                --enable CONFIG_KSU_SUSFS \
-                --enable CONFIG_KSU_SUSFS_SUS_PATH \
-                --enable CONFIG_KSU_SUSFS_SUS_MOUNT \
-                --enable CONFIG_KSU_SUSFS_SUS_KSTAT \
-                --enable CONFIG_KSU_SUSFS_SPOOF_UNAME \
-                --enable CONFIG_KSU_SUSFS_ENABLE_LOG \
-                --enable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-                --enable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-                --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-                --enable CONFIG_KSU_SUSFS_SUS_MAP
+            ./scripts/config --file out/.config \
+              --enable CONFIG_KSU_SUSFS \
+              --enable CONFIG_KSU_SUSFS_SUS_PATH \
+              --enable CONFIG_KSU_SUSFS_SUS_MOUNT \
+              --enable CONFIG_KSU_SUSFS_SUS_KSTAT \
+              --enable CONFIG_KSU_SUSFS_SPOOF_UNAME \
+              --enable CONFIG_KSU_SUSFS_ENABLE_LOG \
+              --enable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+              --enable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+              --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+              --enable CONFIG_KSU_SUSFS_SUS_MAP
           
-              ./scripts/config --file out/.config \
-                --enable CONFIG_TMPFS_XATTR \
-                --enable CONFIG_TMPFS_POSIX_ACL \
-                --enable CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE \
-                --disable LOCALVERSION_AUTO
+            ./scripts/config --file out/.config \
+              --enable CONFIG_TMPFS_XATTR \
+              --enable CONFIG_TMPFS_POSIX_ACL \
+              --enable CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE \
+              --disable LOCALVERSION_AUTO
           
-              make ARCH=arm64 O=out olddefconfig
+            make ARCH=arm64 O=out olddefconfig
          
       - name: "🔨 Build Kernel | 编译内核"
         run: |
