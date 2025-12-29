@@ -365,39 +365,37 @@ jobs:
           sed -i 's/check_defconfig//' ./common/build.config.gki
           echo "✅ 内核配置更新完成"
          
-      - name: "🔨 Build Kernel | 编译内核"
-        run: |
-          echo "🏗️ 开始内核编译..."
-          if [ "${{ github.event.inputs.KERNEL_VERSION }}" == "6.1" ]; then
-            export KBUILD_BUILD_TIMESTAMP="Tue Sep 23 07:41:33 UTC 2025"
-            export KBUILD_BUILD_VERSION=1
-            export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r487747c/bin:$PATH"
-            export PATH="/usr/lib/ccache:$PATH"
-            sudo apt install libelf-dev
-            cd kernel_workspace/common
-            make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld HOSTLD=ld.lld O=out KCFLAGS+=-O2 gki_defconfig all
-
-          elif [ "${{ github.event.inputs.KERNEL_VERSION }}" == "6.6" ]; then
-            export PATH="/usr/lib/ccache:$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH" 
-            export PATH="/usr/lib/ccache:$PATH"
-            sudo apt install libelf-dev
-            cd kernel_workspace/common
-            make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld HOSTLD=ld.lld O=out KCFLAGS+=-O2  gki_defconfig all
-
-          elif [ "${{ github.event.inputs.KERNEL_VERSION }}" == "5.15" ]; then
-            export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r450784e/bin:$PATH"
-            export PATH="/usr/lib/ccache:$PATH"
-            sudo apt install libelf-dev
-            cd kernel_workspace/kernel_platform/common
-            make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld HOSTLD=ld.lld O=out gki_defconfig all
-            
-          elif [ "${{ github.event.inputs.KERNEL_VERSION }}" == "5.10" ]; then
-            export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b/bin:$PATH"
-            export PATH="/usr/lib/ccache:$PATH"
-            sudo apt install libelf-dev
-            cd kernel_workspace/common
-            make -j$(nproc --all) LLVM_IAS=1 LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld HOSTLD=ld.lld O=out gki_defconfig all
-          fi
+          - name: "🔨 Build Kernel | 编译内核"
+            run: |
+              set -e
+              echo "🏗️ 开始内核编译..."
+          
+              sudo apt update
+              sudo apt install -y libelf-dev
+          
+              # ===== Wechsel in richtigen Kernel-Pfad (GKI 6.6 / 6.1) =====
+              cd kernel_workspace/common
+          
+              # ===== LLVM (Google GKI) in PATH =====
+              LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
+              export PATH="/usr/lib/ccache:$LLVM_PATH:$PATH"
+          
+              # ===== Defconfig (IMMER separat!) =====
+              make ARCH=arm64 O=out gki_defconfig
+          
+              # ===== optional: Config Tweaks (KernelSU / SUSFS) =====
+              ./scripts/config --file out/.config --disable LOCALVERSION_AUTO
+          
+              # ===== Config finalisieren =====
+              make ARCH=arm64 O=out olddefconfig
+          
+              # ===== Kernel Build =====
+              make -j$(nproc --all) \
+                LLVM=1 ARCH=arm64 \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CC="ccache clang" \
+                LD=ld.lld HOSTLD=ld.lld \
+                O=out
           
           # 显示ccache统计信息
           ccache -s
