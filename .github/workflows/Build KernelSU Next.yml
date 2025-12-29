@@ -274,6 +274,14 @@ jobs:
           
             LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
             export PATH="$LLVM_PATH:$PATH"
+
+            # 🔴 WICHTIG: Host-Tools explizit setzen
+            export HOSTCC=clang
+            export HOSTLD=ld.lld
+            export LD=ld.lld
+        
+            which ld.lld
+            which clang
           
             make ARCH=arm64 O=out gki_defconfig
           
@@ -309,6 +317,11 @@ jobs:
             
                 LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
                 export PATH="/usr/lib/ccache:$LLVM_PATH:$PATH"
+
+                export HOSTCC=clang
+                export HOSTLD=ld.lld
+                export LD=ld.lld
+            
                 which ld.lld
             
                 make -j$(nproc --all) \
