@@ -157,24 +157,22 @@ jobs:
           echo "🔄 同步代码库(使用$(nproc --all)线程)..."
           repo sync -c -j$(nproc --all) --no-tags --no-clone-bundle --force-sync
 
-          # LLVM in PATH
-          export LLVM_PATH=$(realpath prebuilts/clang/host/linux-x86/clang-*/bin)
+          # LLVM (Google GKI) in PATH setzen – robust
+          LLVM_PATH=$(ls -d prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
+          
+          if [ -z "$LLVM_PATH" ]; then
+            echo "❌ Google LLVM toolchain not found!"
+            ls prebuilts/clang/host/linux-x86 || true
+            exit 1
+          fi
+          
           export PATH="$LLVM_PATH:$PATH"
           
-          # optional Debug
+          # Debug
           which clang
           which ld.lld
-          
-          # Defconfig
-          make ARCH=arm64 O=out gki_defconfig
-          
-          # Config tweaks
-          ./scripts/config --file out/.config \
-            --disable LOCALVERSION_AUTO \
-            --set-val KSU_KPROBES_HOOK n
-          
-          # Finalisieren
-          make ARCH=arm64 O=out olddefconfig
+          clang --version
+          ld.lld --version
           
           echo "✅ 内核配置完成"
 
