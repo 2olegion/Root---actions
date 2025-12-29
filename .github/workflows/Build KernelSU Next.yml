@@ -194,10 +194,10 @@ jobs:
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
 
           echo "📝 复制补丁文件..."
-          cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch ./common/
+          cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch ./common/
           # cp ../kernel_patches/next/scope_min_manual_hooks_v1.6.patch ./common/
-          cp ../susfs4ksu/kernel_patches/fs/* ./common/fs/
-          cp ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+          cp susfs4ksu/kernel_patches/fs/* ./common/fs/
+          cp susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
 
           cp ../kernel_patches/zram/001-lz4.patch ./common/
           cp ../kernel_patches/zram/lz4armv8.S ./common/lib
