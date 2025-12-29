@@ -267,47 +267,48 @@ jobs:
           
           echo "✅ 所有补丁应用完成"
 
-      - name: "⚙️ Configure Kernel (KSU + SUSFS)"
-        run: |
-          set -e
-          cd kernel_workspace/common
-    
-          # ===== LLVM in PATH =====
-          LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
-          export PATH="$LLVM_PATH:$PATH"
-      
-          # ===== Defconfig erzeugen =====
-          make ARCH=arm64 O=out gki_defconfig
-      
-          # ===== KernelSU =====
-          ./scripts/config --file out/.config \
-            --enable CONFIG_KSU
-      
-          # ===== SUSFS (WICHTIG: NACH defconfig!) =====
-          ./scripts/config --file out/.config \
-            --enable CONFIG_KSU_SUSFS \
-            --enable CONFIG_KSU_SUSFS_SUS_PATH \
-            --enable CONFIG_KSU_SUSFS_SUS_MOUNT \
-            --enable CONFIG_KSU_SUSFS_SUS_KSTAT \
-            --enable CONFIG_KSU_SUSFS_SPOOF_UNAME \
-            --enable CONFIG_KSU_SUSFS_ENABLE_LOG \
-            --enable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-            --enable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-            --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-            --enable CONFIG_KSU_SUSFS_SUS_MAP
-      
-          # ===== TMPFS (Mountify etc.) =====
-          ./scripts/config --file out/.config \
-            --enable CONFIG_TMPFS_XATTR \
-            --enable CONFIG_TMPFS_POSIX_ACL
-      
-          # ===== Optimierung =====
-          ./scripts/config --file out/.config \
-            --enable CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE \
-            --disable LOCALVERSION_AUTO
-      
-          # ===== Config finalisieren =====
-          make ARCH=arm64 O=out olddefconfig
+           - name: "⚙️ Configure Kernel (KSU + SUSFS)"
+            run: |
+              set -e
+              cd kernel_workspace/common
+          
+              # LLVM in PATH
+              LLVM_PATH=$(ls -d ../prebuilts/clang/host/linux-x86/clang-*/bin | head -n1)
+              export PATH="$LLVM_PATH:$PATH"
+          
+              # Defconfig
+              make ARCH=arm64 O=out gki_defconfig
+          
+              # KernelSU
+              ./scripts/config --file out/.config --enable CONFIG_KSU
+          
+              # SUSFS
+              ./scripts/config --file out/.config \
+                --enable CONFIG_KSU_SUSFS \
+                --enable CONFIG_KSU_SUSFS_SUS_PATH \
+                --enable CONFIG_KSU_SUSFS_SUS_MOUNT \
+                --enable CONFIG_KSU_SUSFS_SUS_KSTAT \
+                --enable CONFIG_KSU_SUSFS_SPOOF_UNAME \
+                --enable CONFIG_KSU_SUSFS_ENABLE_LOG \
+                --enable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+                --enable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+                --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+                --enable CONFIG_KSU_SUSFS_SUS_MAP
+          
+              # TMPFS
+              ./scripts/config --file out/.config \
+                --enable CONFIG_TMPFS_XATTR \
+                --enable CONFIG_TMPFS_POSIX_ACL
+          
+              # Optimierung
+              ./scripts/config --file out/.config \
+                --enable CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE \
+                --disable LOCALVERSION_AUTO
+          
+              # Finalisieren
+              make ARCH=arm64 O=out olddefconfig
+          
+              echo "✅ Kernel config fertig"
 
           #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
           echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig
