@@ -112,7 +112,7 @@ jobs:
           
           echo "⬇️ Cloning KernelSU-Next..."
           if [ "${{ github.event.inputs.ENABLE_SUSFS }}" == "true" ]; then
-            git clone https://github.com/KernelSU-Next/KernelSU-Next.git -b dev-susfs KernelSU-Next
+            git clone https://github.com/KernelSU-Next/KernelSU-Next.git -b dev KernelSU-Next
           else
             git clone https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           fi
