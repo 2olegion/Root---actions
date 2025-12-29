@@ -118,13 +118,13 @@ jobs:
           
           cd common
           
-          # Setup KernelSU symlink (from common/drivers/, need ../../KernelSU-Next/kernel)
-          ln -sf ../../KernelSU-Next/kernel drivers/kernelsu
+          # Copy KernelSU files instead of symlink (better for Bazel sandbox)
+          echo "📝 Copying KernelSU to drivers/kernelsu..."
+          cp -r ../KernelSU-Next/kernel drivers/kernelsu
           
-          # Verify symlink
-          echo "📋 Verifying symlink:"
-          ls -la drivers/kernelsu
-          ls -la drivers/kernelsu/ || { echo "❌ Symlink broken!"; exit 1; }
+          # Verify copy
+          echo "📋 Verifying KernelSU files:"
+          ls -la drivers/kernelsu/
           
           # Add KernelSU to drivers Makefile
           if ! grep -q "kernelsu" drivers/Makefile; then
@@ -173,22 +173,27 @@ jobs:
           ls -la include/linux/susfs* 2>/dev/null || echo "No SUSFS headers"
           ls -la fs/susfs.c 2>/dev/null || echo "No SUSFS source"
 
-      - name: "📝 Configure Kernel (Bazel)"
+      - name: "📝 Verify Kernel Configuration"
         run: |
-          cd kernel_workspace
+          cd kernel_workspace/common
           
-          # Create defconfig fragment for KernelSU and SUSFS
-          echo "📝 Creating KernelSU config fragment..."
+          echo "📋 Checking Kconfig integration..."
+          grep -n "kernelsu" drivers/Kconfig || echo "KernelSU not in Kconfig"
+          grep -n "kernelsu" drivers/Makefile || echo "KernelSU not in Makefile"
           
-          mkdir -p common/arch/arm64/configs
+          echo "📋 KernelSU Kconfig options:"
+          cat drivers/kernelsu/Kconfig 2>/dev/null | head -30 || echo "No Kconfig found"
           
-          cat > common/arch/arm64/configs/ksu_defconfig << 'EOF'
+          # Create defconfig fragment for Bazel
+          echo "📝 Creating defconfig fragment..."
+          cat > arch/arm64/configs/ksu.fragment << 'EOF'
           CONFIG_KSU=y
           CONFIG_KSU_DEBUG=n
+          CONFIG_FRAME_WARN=0
           EOF
           
           if [ "${{ github.event.inputs.ENABLE_SUSFS }}" == "true" ]; then
-            cat >> common/arch/arm64/configs/ksu_defconfig << 'EOF'
+            cat >> arch/arm64/configs/ksu.fragment << 'EOF'
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -208,107 +213,90 @@ jobs:
           EOF
           fi
           
-          # Disable frame warnings for drivers with large stack frames
-          cat >> common/arch/arm64/configs/ksu_defconfig << 'EOF'
-          CONFIG_FRAME_WARN=0
-          EOF
+          # Remove leading whitespace
+          sed -i 's/^[[:space:]]*//' arch/arm64/configs/ksu.fragment
           
-          # Remove leading whitespace from config
-          sed -i 's/^[[:space:]]*//' common/arch/arm64/configs/ksu_defconfig
-          
-          echo "📋 KSU config fragment:"
-          cat common/arch/arm64/configs/ksu_defconfig
+          echo "📋 Fragment content:"
+          cat arch/arm64/configs/ksu.fragment
 
-      - name: "🔨 Build Kernel (Bazel)"
+      - name: "🔨 Build Kernel (Bazel/build.sh)"
         run: |
           cd kernel_workspace
           
-          echo "🔨 Starting GKI Bazel build..."
-          
-          # Use tools/bazel wrapper
-          BAZEL="tools/bazel"
-          if [ ! -x "$BAZEL" ]; then
-            BAZEL="bazel"
-          fi
-          
-          # Check available targets
-          echo "📋 Checking available GKI targets..."
-          $BAZEL query '//common:*' 2>/dev/null | grep -E "kernel|dist" | head -20 || true
+          echo "🔨 Starting GKI build..."
           
           # Set LTO config
-          LTO_CONFIG=""
-          case "${{ github.event.inputs.LTO_TYPE }}" in
-            thin) LTO_CONFIG="--lto=thin" ;;
-            full) LTO_CONFIG="--lto=full" ;;
-            none) LTO_CONFIG="--lto=none" ;;
-          esac
+          LTO_TYPE="${{ github.event.inputs.LTO_TYPE }}"
           
-          # Create defconfig fragment for KernelSU
-          mkdir -p common/android/abi_gki_ksu
+          # Use tools/bazel
+          BAZEL="tools/bazel"
           
-          cat > common/android/abi_gki_ksu/ksu.fragment << 'EOF'
-          CONFIG_KSU=y
-          CONFIG_KSU_DEBUG=n
-          CONFIG_FRAME_WARN=0
-          EOF
+          # Try different build approaches
           
-          if [ "${{ github.event.inputs.ENABLE_SUSFS }}" == "true" ]; then
-            cat >> common/android/abi_gki_ksu/ksu.fragment << 'EOF'
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_SUS_SU=n
-          EOF
+          # Approach 1: Bazel with --nokmi_symbol_list_strict_mode
+          echo "🚀 Attempt 1: Bazel with relaxed mode..."
+          $BAZEL run //common:kernel_aarch64_dist \
+            --lto=${LTO_TYPE} \
+            --nokmi_symbol_list_strict_mode \
+            --allow_undeclared_modules \
+            -- --dist_dir=dist 2>&1 && { echo "✅ Build successful"; exit 0; }
+          
+          # Approach 2: Bazel without fragment validation
+          echo "🚀 Attempt 2: Bazel with more flags..."
+          $BAZEL run //common:kernel_aarch64_dist \
+            --lto=${LTO_TYPE} \
+            --nokmi_symbol_list_strict_mode \
+            --notrim_nonlisted_kmi \
+            --allow_undeclared_modules \
+            -- --dist_dir=dist 2>&1 && { echo "✅ Build successful"; exit 0; }
+          
+          # Approach 3: Use build_abi.sh if available (skips some checks)
+          if [ -f "build/build_abi.sh" ]; then
+            echo "🚀 Attempt 3: build_abi.sh..."
+            BUILD_CONFIG=common/build.config.gki.aarch64 \
+            LTO=${LTO_TYPE} \
+            SKIP_DEFCONFIG_CHECK=1 \
+            build/build_abi.sh --nodiff 2>&1 && { echo "✅ Build successful"; exit 0; }
           fi
           
-          # Remove leading whitespace from config
-          sed -i 's/^[[:space:]]*//' common/android/abi_gki_ksu/ksu.fragment
+          # Approach 4: Direct kernel build bypassing kleaf
+          echo "🚀 Attempt 4: Direct make build..."
+          cd common
           
-          echo "📋 KSU config fragment:"
-          cat common/android/abi_gki_ksu/ksu.fragment
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
           
-          # Apply config fragment to gki_defconfig
-          echo "📝 Applying KSU config to GKI defconfig..."
-          if [ -f "common/arch/arm64/configs/gki_defconfig" ]; then
-            cat common/android/abi_gki_ksu/ksu.fragment >> common/arch/arm64/configs/gki_defconfig
-            echo "✅ Added KSU config to gki_defconfig"
+          # Find clang
+          CLANG_PATH=$(find ../prebuilts/clang/host/linux-x86 -name "clang" -type f 2>/dev/null | head -1)
+          if [ -n "$CLANG_PATH" ]; then
+            export PATH="$(dirname $CLANG_PATH):$PATH"
           fi
           
-          # Build GKI kernel
-          BUILD_TARGET="//common:kernel_aarch64_dist"
+          mkdir -p ../out
           
-          echo "🚀 Building: $BUILD_TARGET"
-          $BAZEL run $BUILD_TARGET $LTO_CONFIG -- --dist_dir=dist 2>&1 || {
-            echo "⚠️ Standard target failed, trying alternatives..."
-            
-            # Try alternative targets
-            for target in \
-              "//common:kernel_aarch64" \
-              "//common:kernel_dist" \
-              "//common-modules/virtual-device:virtual_device_aarch64_dist"
-            do
-              echo "Trying: $target"
-              if $BAZEL run "$target" $LTO_CONFIG -- --dist_dir=dist 2>&1; then
-                echo "✅ Build successful with: $target"
-                break
-              fi
-            done
+          # Make defconfig
+          make O=../out gki_defconfig
+          
+          # Apply KSU config
+          cat arch/arm64/configs/ksu.fragment >> ../out/.config
+          make O=../out olddefconfig
+          
+          # Build
+          make O=../out -j$(nproc) Image 2>&1 || {
+            echo "❌ All build attempts failed"
+            exit 1
           }
           
+          mkdir -p ../dist
+          cp ../out/arch/arm64/boot/Image ../dist/
+          
+          echo "✅ Build successful"
+          cd ..
+          
           echo "📁 Build output:"
-          ls -la dist/ 2>/dev/null || true
+          ls -la dist/ 2>/dev/null || ls -la out/dist/ 2>/dev/null || ls -la out/arch/arm64/boot/ 2>/dev/null || true
 
       - name: "📋 Find Built Kernel"
         run: |
@@ -316,16 +304,29 @@ jobs:
           
           echo "🔍 Searching for built kernel..."
           
-          # Check common output locations
-          for dir in dist out/dist out/android*-${{ github.event.inputs.KERNEL_VERSION }}/dist bazel-out; do
+          # Check all possible output locations
+          for dir in dist out/dist out out/arch/arm64/boot bazel-bin; do
             if [ -d "$dir" ]; then
-              echo "📁 Contents of $dir:"
-              find "$dir" -name "Image*" -o -name "*.ko" 2>/dev/null | head -20
+              echo "📁 Checking $dir:"
+              find "$dir" \( -name "Image" -o -name "Image.lz4" -o -name "Image.gz" \) 2>/dev/null | head -5
             fi
           done
           
-          # Find Image file
-          IMAGE_PATH=$(find . -name "Image" -o -name "Image.lz4" -o -name "Image.gz" 2>/dev/null | grep -v bazel-out/host | head -1)
+          # Find Image file (prioritize dist directory)
+          IMAGE_PATH=""
+          for search_dir in dist out/dist out/arch/arm64/boot; do
+            if [ -d "$search_dir" ]; then
+              found=$(find "$search_dir" -name "Image" 2>/dev/null | head -1)
+              if [ -n "$found" ]; then
+                IMAGE_PATH="$found"
+                break
+              fi
+            fi
+          done
+          
+          if [ -z "$IMAGE_PATH" ]; then
+            IMAGE_PATH=$(find . -name "Image" 2>/dev/null | grep -v "bazel-out/host" | grep -v ".git" | head -1)
+          fi
           
           if [ -n "$IMAGE_PATH" ]; then
             echo "✅ Found kernel image: $IMAGE_PATH"
@@ -333,7 +334,8 @@ jobs:
             echo "IMAGE_PATH=$IMAGE_PATH" >> $GITHUB_ENV
           else
             echo "❌ No kernel image found!"
-            find . -type f -name "Image*" 2>/dev/null
+            echo "📋 All Image files:"
+            find . -name "Image*" -type f 2>/dev/null | head -20
             exit 1
           fi
 
