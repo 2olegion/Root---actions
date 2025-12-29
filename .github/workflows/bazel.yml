@@ -1,0 +1,399 @@
+name: "Build (Bazel GKI)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ANDROID_VERSION:
+        description: "Android Version"
+        required: true
+        type: choice
+        default: "android15"
+        options:
+          - android15
+          - android14
+      KERNEL_VERSION:
+        description: "Kernel Version"
+        required: true
+        type: choice
+        default: "6.6"
+        options:
+          - "6.6"
+          - "6.1"
+      BUILD_CONFIG:
+        description: "Build Config"
+        required: true
+        type: choice
+        default: "aarch64"
+        options:
+          - aarch64
+          - x86_64
+      LTO_TYPE:
+        description: "LTO Type"
+        required: true
+        type: choice
+        default: "thin"
+        options:
+          - thin
+          - full
+          - none
+      ENABLE_SUSFS:
+        description: "Enable SUSFS"
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: "⚙️ Setup Environment"
+        run: |
+          echo "🧹 Freeing up disk space..."
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          df -h
+          
+          echo "🔧 Setting up build environment..."
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential curl flex git gnupg gperf \
+            libelf-dev libncurses5-dev libssl-dev lz4 \
+            python3 python3-pip zip unzip rsync cpio \
+            wget jq
+          
+          # Install repo tool
+          echo "📦 Installing repo tool..."
+          mkdir -p ~/.bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/.bin/repo
+          chmod a+x ~/.bin/repo
+          echo "$HOME/.bin" >> $GITHUB_PATH
+          export PATH="$HOME/.bin:$PATH"
+          
+          # Configure git
+          git config --global user.email "build@github.actions"
+          git config --global user.name "GitHub Actions"
+          git config --global color.ui false
+
+      - name: "📥 Clone Kernel Source (Bazel)"
+        run: |
+          mkdir -p kernel_workspace && cd kernel_workspace
+          
+          BRANCH="${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}"
+          echo "📦 Cloning GKI kernel branch: common-$BRANCH"
+          
+          # Initialize repo with shallow clone
+          ~/.bin/repo init \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b common-${BRANCH} \
+            --depth=1 \
+            --partial-clone \
+            --clone-filter=blob:limit=10M
+          
+          # Sync only essential projects
+          ~/.bin/repo sync -c -j$(nproc) --no-tags --optimized-fetch --prune
+          
+          echo "📋 Workspace contents:"
+          ls -la
+          
+          echo "📋 Checking for Bazel build system:"
+          ls -la tools/bazel 2>/dev/null && echo "✅ tools/bazel found" || echo "❌ tools/bazel not found"
+          ls -la build/kernel/*.bzl 2>/dev/null | head -5 || true
+          ls -la common/BUILD.bazel 2>/dev/null || echo "No BUILD.bazel in common/"
+          
+          # Check defconfig
+          echo "📋 GKI defconfig:"
+          ls -la common/arch/arm64/configs/ 2>/dev/null || true
+
+      - name: "🔧 Setup KernelSU-Next"
+        run: |
+          cd kernel_workspace
+          
+          echo "⬇️ Cloning KernelSU-Next..."
+          if [ "${{ github.event.inputs.ENABLE_SUSFS }}" == "true" ]; then
+            git clone https://github.com/KernelSU-Next/KernelSU-Next.git -b dev-susfs KernelSU-Next
+          else
+            git clone https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+          fi
+          
+          cd common
+          
+          # Setup KernelSU symlink
+          ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+          
+          # Add KernelSU to drivers Makefile
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          fi
+          
+          # Add KernelSU Kconfig include
+          if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
+            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          fi
+          
+          echo "✅ KernelSU-Next setup complete"
+          ls -la drivers/kernelsu/
+
+      - name: "🔧 Setup SUSFS"
+        if: ${{ github.event.inputs.ENABLE_SUSFS == 'true' }}
+        run: |
+          cd kernel_workspace
+          
+          BRANCH="gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}"
+          echo "⬇️ Cloning susfs4ksu branch: $BRANCH"
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$BRANCH"
+          
+          cd common
+          
+          # Copy SUSFS source files
+          echo "📝 Copying SUSFS files..."
+          cp -v ../susfs4ksu/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
+          cp -v ../susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
+          
+          # Apply SUSFS kernel patch
+          SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}.patch"
+          
+          if [ -f "$SUSFS_PATCH" ]; then
+            echo "🔧 Applying SUSFS patch..."
+            patch -p1 -F 3 < "$SUSFS_PATCH" || {
+              echo "⚠️ Some patch hunks failed, checking rejections..."
+              find . -name "*.rej" -exec echo "=== {} ===" \; -exec cat {} \;
+            }
+          else
+            echo "❌ SUSFS patch not found!"
+            ls ../susfs4ksu/kernel_patches/*.patch 2>/dev/null || true
+          fi
+          
+          # Verify
+          echo "🔍 Verification:"
+          ls -la include/linux/susfs* 2>/dev/null || echo "No SUSFS headers"
+          ls -la fs/susfs.c 2>/dev/null || echo "No SUSFS source"
+
+      - name: "📝 Configure Kernel (Bazel)"
+        run: |
+          cd kernel_workspace
+          
+          # Create defconfig fragment for KernelSU and SUSFS
+          echo "📝 Creating KernelSU config fragment..."
+          
+          mkdir -p common/arch/arm64/configs
+          
+          cat > common/arch/arm64/configs/ksu_defconfig << 'EOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_DEBUG=n
+          EOF
+          
+          if [ "${{ github.event.inputs.ENABLE_SUSFS }}" == "true" ]; then
+            cat >> common/arch/arm64/configs/ksu_defconfig << 'EOF'
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_SU=n
+          EOF
+          fi
+          
+          # Disable frame warnings for drivers with large stack frames
+          cat >> common/arch/arm64/configs/ksu_defconfig << 'EOF'
+          CONFIG_FRAME_WARN=0
+          EOF
+          
+          # Remove leading whitespace from config
+          sed -i 's/^[[:space:]]*//' common/arch/arm64/configs/ksu_defconfig
+          
+          echo "📋 KSU config fragment:"
+          cat common/arch/arm64/configs/ksu_defconfig
+
+      - name: "🔨 Build Kernel (Bazel)"
+        run: |
+          cd kernel_workspace
+          
+          echo "🔨 Starting GKI Bazel build..."
+          
+          # Use tools/bazel wrapper
+          BAZEL="tools/bazel"
+          if [ ! -x "$BAZEL" ]; then
+            BAZEL="bazel"
+          fi
+          
+          # Check available targets
+          echo "📋 Checking available GKI targets..."
+          $BAZEL query '//common:*' 2>/dev/null | grep -E "kernel|dist" | head -20 || true
+          
+          # Set LTO config
+          LTO_CONFIG=""
+          case "${{ github.event.inputs.LTO_TYPE }}" in
+            thin) LTO_CONFIG="--lto=thin" ;;
+            full) LTO_CONFIG="--lto=full" ;;
+            none) LTO_CONFIG="--lto=none" ;;
+          esac
+          
+          # Create defconfig fragment for KernelSU
+          mkdir -p common/android/abi_gki_ksu
+          
+          cat > common/android/abi_gki_ksu/ksu.fragment << 'EOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_DEBUG=n
+          CONFIG_FRAME_WARN=0
+          EOF
+          
+          if [ "${{ github.event.inputs.ENABLE_SUSFS }}" == "true" ]; then
+            cat >> common/android/abi_gki_ksu/ksu.fragment << 'EOF'
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_SU=n
+          EOF
+          fi
+          
+          # Remove leading whitespace from config
+          sed -i 's/^[[:space:]]*//' common/android/abi_gki_ksu/ksu.fragment
+          
+          echo "📋 KSU config fragment:"
+          cat common/android/abi_gki_ksu/ksu.fragment
+          
+          # Apply config fragment to gki_defconfig
+          echo "📝 Applying KSU config to GKI defconfig..."
+          if [ -f "common/arch/arm64/configs/gki_defconfig" ]; then
+            cat common/android/abi_gki_ksu/ksu.fragment >> common/arch/arm64/configs/gki_defconfig
+            echo "✅ Added KSU config to gki_defconfig"
+          fi
+          
+          # Build GKI kernel
+          BUILD_TARGET="//common:kernel_aarch64_dist"
+          
+          echo "🚀 Building: $BUILD_TARGET"
+          $BAZEL run $BUILD_TARGET $LTO_CONFIG -- --dist_dir=dist 2>&1 || {
+            echo "⚠️ Standard target failed, trying alternatives..."
+            
+            # Try alternative targets
+            for target in \
+              "//common:kernel_aarch64" \
+              "//common:kernel_dist" \
+              "//common-modules/virtual-device:virtual_device_aarch64_dist"
+            do
+              echo "Trying: $target"
+              if $BAZEL run "$target" $LTO_CONFIG -- --dist_dir=dist 2>&1; then
+                echo "✅ Build successful with: $target"
+                break
+              fi
+            done
+          }
+          
+          echo "📁 Build output:"
+          ls -la dist/ 2>/dev/null || true
+
+      - name: "📋 Find Built Kernel"
+        run: |
+          cd kernel_workspace
+          
+          echo "🔍 Searching for built kernel..."
+          
+          # Check common output locations
+          for dir in dist out/dist out/android*-${{ github.event.inputs.KERNEL_VERSION }}/dist bazel-out; do
+            if [ -d "$dir" ]; then
+              echo "📁 Contents of $dir:"
+              find "$dir" -name "Image*" -o -name "*.ko" 2>/dev/null | head -20
+            fi
+          done
+          
+          # Find Image file
+          IMAGE_PATH=$(find . -name "Image" -o -name "Image.lz4" -o -name "Image.gz" 2>/dev/null | grep -v bazel-out/host | head -1)
+          
+          if [ -n "$IMAGE_PATH" ]; then
+            echo "✅ Found kernel image: $IMAGE_PATH"
+            ls -la "$IMAGE_PATH"
+            echo "IMAGE_PATH=$IMAGE_PATH" >> $GITHUB_ENV
+          else
+            echo "❌ No kernel image found!"
+            find . -type f -name "Image*" 2>/dev/null
+            exit 1
+          fi
+
+      - name: "📦 Package with AnyKernel3"
+        run: |
+          cd kernel_workspace
+          
+          git clone https://github.com/osm0sis/AnyKernel3.git --depth=1
+          
+          # Clean AnyKernel3
+          rm -rf AnyKernel3/.git AnyKernel3/.github AnyKernel3/README.md
+          
+          # Configure AnyKernel3
+          cat > AnyKernel3/anykernel.sh << 'EOF'
+          # AnyKernel3 Ramdisk Mod Script
+          # osm0sis @ xda-developers
+          
+          properties() { '
+          kernel.string=KernelSU-Next GKI Kernel
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=
+          device.name2=
+          device.name3=
+          device.name4=
+          device.name5=
+          supported.versions=
+          supported.patchlevels=
+          '; }
+          
+          block=/dev/block/by-name/boot;
+          is_slot_device=auto;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+          
+          . tools/ak3-core.sh;
+          
+          set_perm_recursive 0 0 755 644 $ramdisk/*;
+          set_perm_recursive 0 0 750 750 $ramdisk/init* $ramdisk/sbin;
+          
+          dump_boot;
+          write_boot;
+          EOF
+          
+          # Copy kernel image
+          if [ -n "$IMAGE_PATH" ]; then
+            cp "$IMAGE_PATH" AnyKernel3/Image
+          fi
+          
+          # Create zip
+          cd AnyKernel3
+          ZIPNAME="KernelSU-Next-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}-GKI-$(date +%Y%m%d).zip"
+          zip -r9 "../$ZIPNAME" * -x '*.git*'
+          
+          echo "ZIPNAME=$ZIPNAME" >> $GITHUB_ENV
+          echo "✅ Created: $ZIPNAME"
+
+      - name: "📤 Upload Artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: KernelSU-Next-GKI-${{ github.event.inputs.ANDROID_VERSION }}-${{ github.event.inputs.KERNEL_VERSION }}
+          path: kernel_workspace/*.zip
+          retention-days: 7
