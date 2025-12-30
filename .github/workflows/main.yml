@@ -351,11 +351,11 @@ jobs:
             --enable CONFIG_KSU_SUSFS_SUS_MOUNT \
             --enable CONFIG_KSU_SUSFS_SUS_KSTAT \
             --enable CONFIG_KSU_SUSFS_SPOOF_UNAME \
-            --enable CONFIG_KSU_SUSFS_ENABLE_LOG \
+            --disable CONFIG_KSU_SUSFS_ENABLE_LOG \
             --enable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-            --enable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-            --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-            --enable CONFIG_KSU_SUSFS_SUS_MAP
+            --disable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            --disable CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+            --disable CONFIG_KSU_SUSFS_SUS_MAP
           
           # Additional kernel options
           ./scripts/config --file out/.config \
