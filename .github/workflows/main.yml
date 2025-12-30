@@ -31,7 +31,7 @@ on:
         default: 'default'
 
       SUSFS:
-        description: "Enable SUSFS"
+        description: "Enable Susfs"
         required: false
         type: choice
         options:
@@ -222,6 +222,7 @@ jobs:
           echo "✅ KernelSU Next configured (Version: $KSU_VERSION)"
 
       - name: "🔧 Setup SUSFS"
+        if: ${{ github.event.inputs.Susfs == 'On' }}
         run: |
           cd kernel_workspace
           echo "⬇️ Downloading patches..."
