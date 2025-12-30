@@ -1,0 +1,126 @@
+name: Build GKI Kernel with KernelSU
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: 'GKI Kernel Version (z.B. 5.15, 6.1)'
+        required: true
+        default: '5.15'
+      su_provider:
+        description: 'KernelSU Provider (kernelsu / wildksu)'
+        required: true
+        default: 'kernelsu'
+      device_codename:
+        description: 'Device Codename (für AnyKernel3)'
+        required: false
+        default: 'generic'
+      android_version:
+        description: 'Android Version (für AnyKernel3)'
+        required: false
+        default: '14'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    container:
+      image: ghcr.io/tiann/kernel_build:ubuntu2204_aarch64
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        path: kernel
+
+    - name: Initialize environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git bc bison flex libssl-dev make python3
+
+    - name: Download GKI Kernel Source
+      run: |
+        KERNEL_VERSION="${{ github.event.inputs.kernel_version || '5.15' }}"
+        wget "https://android.googlesource.com/kernel/common/+archive/refs/tags/android${KERNEL_VERSION}.0.tar.gz" -O kernel_source.tar.gz
+        tar -xzf kernel_source.tar.gz -C kernel/
+        cd kernel/android${KERNEL_VERSION}.0
+        git fetch --all --tags --prune
+        git checkout android${KERNEL_VERSION}.0
+
+    - name: Download KernelSU
+      run: |
+        KSU_PROVIDER="${{ github.event.inputs.su_provider || 'kernelsu' }}"
+        if [ "$KSU_PROVIDER" = "wildksu" ]; then
+          git clone https://github.com/WildKsu/KernelSU.git kernel/KernelSU --depth=1
+        else
+          git clone https://github.com/tiann/KernelSU.git kernel/KernelSU --depth=1
+        fi
+
+    - name: Patch Kernel with KernelSU
+      run: |
+        cd kernel/android${KERNEL_VERSION}.0
+        cp -r ../KernelSU ./
+        ./KernelSU/tools/ksu-patch.sh
+
+    - name: Setup build environment
+      run: |
+        cd kernel/android${KERNEL_VERSION}.0
+        export ARCH=arm64
+        export SUBARCH=arm64
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+        export CC=clang
+        export LD=ld.lld
+        export CLANG_TRIPLE=aarch64-linux-gnu-
+        export REAL_CC=clang
+
+    - name: Build Kernel
+      run: |
+        cd kernel/android${KERNEL_VERSION}.0
+        make -j$(nproc) LLVM=1 LLVM_IAS=1 defconfig
+        make -j$(nproc) LLVM=1 LLVM_IAS=1 Image.gz-dtb
+
+    - name: Download AnyKernel3
+      run: |
+        git clone https://github.com/osm0sis/AnyKernel3.git kernel/AnyKernel3 --depth=1
+
+    - name: Prepare AnyKernel3
+      run: |
+        DEVICE_CODENAME="${{ github.event.inputs.device_codename || 'generic' }}"
+        ANDROID_VERSION="${{ github.event.inputs.android_version || '14' }}"
+        
+        cd kernel/AnyKernel3
+        sed -i "s/^device.name=.*$/device.name=$DEVICE_CODENAME/" anykernel.sh
+        sed -i "s/^do.devicecheck=.*$/do.devicecheck=0/" anykernel.sh
+        sed -i "s/^do.modules=.*$/do.modules=0/" anykernel.sh
+        sed -i "s/^do.cleanup=.*$/do.cleanup=1/" anykernel.sh
+        sed -i "s/^do.cleanuponabort=.*$/do.cleanuponabort=0/" anykernel.sh
+        
+        # Android Version setzen
+        sed -i "/^# Android/ a\ \ version=$ANDROID_VERSION" anykernel.sh
+        
+        # KernelSU Banner hinzufügen
+        echo "kernel.string=KernelSU GKI Kernel by GitHub Actions" >> anykernel.sh
+
+    - name: Create flashable ZIP
+      run: |
+        cd kernel
+        cp android${KERNEL_VERSION}.0/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+        cp android${KERNEL_VERSION}.0/.config AnyKernel3/anykernel.config || true
+        
+        cd AnyKernel3
+        zip -r9 ../KernelSU-GKI-${{ github.event.inputs.kernel_version || '5.15' }}-${{ github.event.inputs.device_codename || 'generic' }}.zip * -x .git README.md *placeholder
+
+    - name: Upload Kernel ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: KernelSU-GKI-${{ github.event.inputs.kernel_version || '5.15' }}-${{ github.event.inputs.su_provider || 'kernelsu' }}-${{ github.event.inputs.device_codename || 'generic' }}.zip
+        path: kernel/KernelSU-GKI-*.zip
+        retention-days: 30
+
+    - name: Show build info
+      run: |
+        echo "✅ Build erfolgreich abgeschlossen!"
+        echo "Kernel Version: ${{ github.event.inputs.kernel_version || '5.15' }}"
+        echo "KernelSU Provider: ${{ github.event.inputs.su_provider || 'kernelsu' }}"
+        echo "Device: ${{ github.event.inputs.device_codename || 'generic' }}"
+        ls -la kernel/*.zip
