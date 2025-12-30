@@ -330,6 +330,7 @@ jobs:
           echo "✅ SUSFS setup complete"
 
       - name: "⚙️ Configure Kernel (KSU + SUSFS)"
+        if: ${{ github.event.inputs.Susfs == 'On' }}
         run: |
           set -e
           cd kernel_workspace/common
@@ -395,6 +396,14 @@ jobs:
           grep -E "CONFIG_KSU=|CONFIG_KSU_SUSFS=|CONFIG_FRAME_WARN=" out/.config || true
           
           echo "✅ Kernel configuration complete"
+
+          # Basic kernel settings
+          ./scripts/config --file out/.config \
+            --disable LOCALVERSION_AUTO \
+            --set-val KSU_KPROBES_HOOK n
+          
+          # Enable KSU
+          ./scripts/config --file out/.config --enable CONFIG_KSU
 
       - name: "🔨 Build Kernel"
         run: |
