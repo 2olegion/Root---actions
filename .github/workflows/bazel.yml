@@ -125,6 +125,17 @@ jobs:
           # Verify copy
           echo "📋 Verifying KernelSU files:"
           ls -la drivers/kernelsu/
+
+          # Bazel-feste Version Injection
+          KBUILD=drivers/kernelsu/Kbuild
+          {
+            echo "KSU_GIT_VERSION := $KSU_COMMITS"
+            echo "KSU_GIT_TAG := $KSU_VERSION"
+            echo "KSU_GIT_VERSION_VALID := 1"
+            echo ""
+            cat "$KBUILD"
+          } > "$KBUILD.new"
+          mv "$KBUILD.new" "$KBUILD"
           
           # Add KernelSU to drivers Makefile
           if ! grep -q "kernelsu" drivers/Makefile; then
