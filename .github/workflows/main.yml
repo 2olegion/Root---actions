@@ -32,7 +32,7 @@ on:
 
       SUSFS:
         description: "Enable SUSFS"
-        required: true
+        required: false
         type: choice
         options:
             - 'On'
