@@ -26,10 +26,19 @@ on:
         default: '6.6'
       
       FEIL:
-        description: "Device Manifest (default.xml etc.)"
+        description: "Device Manifest (default.xml etc)"
         required: false
         default: 'default'
-      
+
+      SUSFS:
+        description: "Enable SUSFS"
+        required: true
+        type: choice
+        options:
+            - 'On'
+            - 'Off'
+        default: 'On'
+        
       lz4kd:
         description: "Enable lz4kd (Off: 6.1=lz4+zstd, 6.6=lz4)"
         required: true
